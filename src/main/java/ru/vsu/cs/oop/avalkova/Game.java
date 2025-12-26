@@ -1,116 +1,226 @@
 package ru.vsu.cs.oop.avalkova;
 
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Scanner;
 
+/**
+ * Основной класс игры для 2 игроков, управляющий игровым процессом.
+ * Координирует взаимодействие между человеком и ботом или двумя ботами.
+ */
 public class Game {
     private GameBoard board;
     private GameRules rules;
+    private List<Player> players;
+    private List<PlayerStrategy> strategies;
     private Player currentPlayer;
-    private Timer gameTimer;
     private boolean gameOver;
+    private int turnCount;
+    private GameTimer gameTimer;
+    private boolean observerMode;
 
-    public Game() {
-        this.rules = new GameRules();
-        this.board = new GameBoard(6);
-        this.currentPlayer = Player.PLAYER1;
+    /**
+     * Создает новую игру для 2 игроков.
+     * @param playerCount Количество игроков (должен быть 2)
+     * @param humanPlayerNumber Номер игрока-человека (1 - красный, 2 - синий, -1 - режим наблюдения)
+     */
+    public Game(int playerCount, int humanPlayerNumber) {
         this.gameOver = false;
+        this.turnCount = 0;
+        this.observerMode = (humanPlayerNumber == -1);
+        Scanner scanner = new Scanner(System.in);
+
+        System.out.println("Старт игры на " + playerCount + " игроков");
+        System.out.println("Режим: " + (observerMode ? "Наблюдение" : "Игра против бота"));
+
+        // Инициализируем таймер на 5 минут
+        this.gameTimer = new GameTimer(5);
+        this.gameTimer.start(() -> {
+            System.out.println("Время вышло! Игра окончена.");
+            gameOver = true;
+        });
+
+        this.board = new GameBoard(16, playerCount);
+        this.rules = new GameRules();
+        initializePlayers(playerCount, humanPlayerNumber, scanner);
+
+        currentPlayer = players.get(0);
+        System.out.println("Первый ход: " + currentPlayer.getName());
+        board.displayBoard();
     }
 
-    public void startInteractive(String playerChoice) {
-        Player humanPlayer = determineHumanPlayer(playerChoice);
-        PlayerStrategy human = new HumanPlayer(new java.util.Scanner(System.in), rules); // Добавлен rules
-        PlayerStrategy bot = new RandomBot(rules);
+    /**
+     * Выполняет ход, если он допустим по правилам.
+     * @param move Ход для выполнения
+     */
+    public void makeMove(Move move) {
+        if (gameOver || gameTimer.isExpired()) return;
 
-        System.out.println("Начало игры! Вы играете за " + humanPlayer.getSymbol());
-        startGameTimer();
+        if (move != null && rules.isValidMove(move, board)) {
+            System.out.println("Ход: " + move);
+            board.applyMove(move);
 
-        while (!gameOver) {
-            board.display();
-            System.out.println("Ход игрока: " + currentPlayer.getSymbol());
-
-            try {
-                Move move;
-                if (currentPlayer == humanPlayer) {
-                    move = human.makeMove(board, currentPlayer);
-                } else {
-                    move = bot.makeMove(board, currentPlayer);
-                }
-
-                board.applyMove(move);
-
-                if (rules.isGameOver(board, currentPlayer)) {
-                    System.out.println("Игрок " + currentPlayer.getSymbol() + " победил!");
-                    gameOver = true;
-                }
-
-                currentPlayer = currentPlayer.next();
-
-            } catch (Exception e) {
-                System.out.println("Ошибка: " + e.getMessage());
+            if (board.isInGoalArea(move.getTo(), move.getPlayer())) {
+                move.getPlayer().pieceReachedGoal();
+                System.out.println("Шашка в цели! У " + move.getPlayer().getName() +
+                        ": " + move.getPlayer().getPiecesInGoal() + "/10");
             }
-        }
 
-        stopGameTimer();
-        board.display();
-    }
+            turnCount++;
+            board.displayBoard();
 
-    public void startObserver() {
-        PlayerStrategy bot1 = new RandomBot(rules);
-        PlayerStrategy bot2 = new RandomBot(rules);
-
-        System.out.println("Бот vs Бот - наблюдаем за игрой!");
-        startGameTimer();
-
-        while (!gameOver) {
-            board.display();
-            System.out.println("Ход игрока: " + currentPlayer.getSymbol());
-
-            try {
-                Thread.sleep(1000);
-
-                Move move = (currentPlayer == Player.PLAYER1) ?
-                        bot1.makeMove(board, currentPlayer) :
-                        bot2.makeMove(board, currentPlayer);
-
-                board.applyMove(move);
-
-                if (rules.isGameOver(board, currentPlayer)) {
-                    System.out.println("Игрок " + currentPlayer.getSymbol() + " победил!");
-                    gameOver = true;
-                }
-
-                currentPlayer = currentPlayer.next();
-
-            } catch (Exception e) {
-                System.out.println("Ошибка: " + e.getMessage());
-            }
-        }
-
-        stopGameTimer();
-        board.display();
-    }
-
-    private Player determineHumanPlayer(String choice) {
-        if ("1".equals(choice)) return Player.PLAYER1;
-        if ("2".equals(choice)) return Player.PLAYER2;
-        return Math.random() > 0.5 ? Player.PLAYER1 : Player.PLAYER2;
-    }
-
-    private void startGameTimer() {
-        gameTimer = new Timer();
-        gameTimer.schedule(new TimerTask() {
-            @Override
-            public void run() {
-                System.out.println("Время вышло! Ничья.");
+            if (rules.hasWon(currentPlayer, board)) {
                 gameOver = true;
+                gameTimer.stop();
+                System.out.println("ПОБЕДИТЕЛЬ: " + currentPlayer.getName());
+            } else {
+                nextPlayer();
             }
-        }, 5 * 60 * 1000); // 5 минут
+        }
     }
 
-    private void stopGameTimer() {
-        if (gameTimer != null) {
-            gameTimer.cancel();
+    /**
+     * Выполняет ход бота.
+     */
+    public void makeBotMove() {
+        if (gameOver || gameTimer.isExpired()) return;
+
+        List<Move> validMoves = rules.getAllValidMoves(currentPlayer, board);
+        if (!validMoves.isEmpty()) {
+            int playerIndex = currentPlayer.getNumber() - 1;
+            PlayerStrategy strategy = strategies.get(playerIndex);
+            Move move = strategy.makeMove(board, rules, currentPlayer);
+
+            if (move != null) {
+                System.out.println("Бот " + currentPlayer.getName() + " ходит: " + move);
+                board.applyMove(move);
+
+                if (board.isInGoalArea(move.getTo(), currentPlayer)) {
+                    currentPlayer.pieceReachedGoal();
+                    System.out.println("Шашка бота в цели! У " + currentPlayer.getName() +
+                            ": " + currentPlayer.getPiecesInGoal() + "/10");
+                }
+
+                turnCount++;
+                board.displayBoard();
+
+                if (rules.hasWon(currentPlayer, board)) {
+                    gameOver = true;
+                    gameTimer.stop();
+                    System.out.println("ПОБЕДИТЕЛЬ: " + currentPlayer.getName());
+                } else {
+                    nextPlayer();
+                }
+            }
         }
+    }
+
+    /**
+     * Возвращает текущее состояние игровой доски.
+     * @return Объект игровой доски
+     */
+    public GameBoard getBoard() {
+        return board;
+    }
+
+    /**
+     * Возвращает текущего игрока (чей ход).
+     * @return Текущий игрок (Красный или Синий)
+     */
+    public Player getCurrentPlayer() {
+        return currentPlayer;
+    }
+
+    /**
+     * Возвращает список всех игроков в игре.
+     * @return Список из двух игроков: Красный и Синий
+     */
+    public List<Player> getPlayers() {
+        return players;
+    }
+
+    /**
+     * Проверяет, завершена ли игра.
+     * @return true если игра завершена или время вышло, false в противном случае
+     */
+    public boolean isGameOver() {
+        return gameOver || gameTimer.isExpired();
+    }
+
+    /**
+     * Возвращает количество сделанных ходов.
+     * @return Номер текущего хода
+     */
+    public int getTurnCount() {
+        return turnCount;
+    }
+
+    /**
+     * Возвращает правила игры.
+     * @return Объект правил игры
+     */
+    public GameRules getRules() {
+        return rules;
+    }
+
+    /**
+     * Возвращает оставшееся время в минутах.
+     * @return Количество оставшихся минут
+     */
+    public int getRemainingMinutes() {
+        return gameTimer.getMinutes();
+    }
+
+    /**
+     * Возвращает оставшееся время в секундах.
+     * @return Количество оставшихся секунд в текущей минуте
+     */
+    public int getRemainingSeconds() {
+        return gameTimer.getSeconds();
+    }
+
+    /**
+     * Возвращает таймер игры.
+     * @return Объект таймера
+     */
+    public GameTimer getGameTimer() {
+        return gameTimer;
+    }
+
+    /**
+     * Проверяет, является ли игра режимом наблюдения.
+     * @return true если режим наблюдения, false если игра против бота
+     */
+    public boolean isObserverMode() {
+        return observerMode;
+    }
+
+    private void initializePlayers(int playerCount, int humanPlayerNumber, Scanner scanner) {
+        players = new ArrayList<>();
+        strategies = new ArrayList<>();
+
+        for (int i = 1; i <= playerCount; i++) {
+            Player player = new Player(i);
+            players.add(player);
+
+            if (observerMode) {
+                // В режиме наблюдения оба игрока - боты
+                strategies.add(new RandomBot(i));
+                System.out.println("Игрок " + i + ": Бот");
+            } else if (i == humanPlayerNumber) {
+                strategies.add(new HumanPlayer(scanner));
+                System.out.println("Игрок " + i + ": Человек");
+            } else {
+                strategies.add(new RandomBot(i));
+                System.out.println("Игрок " + i + ": Бот");
+            }
+        }
+    }
+
+    private void nextPlayer() {
+        int currentIndex = players.indexOf(currentPlayer);
+        int nextIndex = (currentIndex + 1) % players.size();
+        currentPlayer = players.get(nextIndex);
+        System.out.println("Следующий ход: " + currentPlayer.getName());
     }
 }

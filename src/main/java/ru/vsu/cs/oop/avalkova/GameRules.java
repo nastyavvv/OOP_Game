@@ -1,94 +1,111 @@
 package ru.vsu.cs.oop.avalkova;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 
+/**
+ * Класс, содержащий правила игры в китайские шашки.
+ * Проверяет корректность ходов и определяет победителя.
+ */
 public class GameRules {
-    private static final List<Position> DIRECTIONS = Arrays.asList(
-            new Position(1, 0), new Position(-1, 0),
-            new Position(0, 1), new Position(0, -1),
-            new Position(1, 1), new Position(-1, -1),
-            new Position(1, -1), new Position(-1, 1)
-    );
+    private static final int[][] DIRECTIONS = {
+            {1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}
+    };
 
-    public boolean isValidMove(Move move, GameBoard board) { // Исправлен параметр
-        if (!move.from().isValid(board.getSize()) || !move.to().isValid(board.getSize())) {
+    /**
+     * Проверяет, является ли ход допустимым.
+     * @param move Ход для проверки
+     * @param board Игровая доска
+     * @return true если ход допустим, false в противном случае
+     */
+    public boolean isValidMove(Move move, GameBoard board) {
+        if (move == null) return false;
+
+        Position from = move.getFrom();
+        Position to = move.getTo();
+
+        if (!board.isValidPosition(from) || !board.isValidPosition(to)) {
             return false;
         }
 
-        if (board.getPieceAt(move.from()) != move.player()) {
+        Player playerAtFrom = board.getPieceAt(from);
+        if (playerAtFrom == null || !playerAtFrom.equals(move.getPlayer())) {
             return false;
         }
 
-        if (board.getPieceAt(move.to()) != Player.EMPTY) {
+        if (!board.isEmpty(to)) {
             return false;
         }
 
-        return move.isJump() ? isValidJump(move, board) : move.isValidStep();
+        int dx = Math.abs(to.getX() - from.getX());
+        int dy = Math.abs(to.getY() - from.getY());
+
+        if (dx <= 1 && dy <= 1 && dx + dy > 0) {
+            return true;
+        }
+
+        if (dx == 2 && dy == 0) {
+            Position middle = new Position((from.getX() + to.getX()) / 2, from.getY());
+            return board.isValidPosition(middle) && !board.isEmpty(middle);
+        }
+
+        if (dx == 0 && dy == 2) {
+            Position middle = new Position(from.getX(), (from.getY() + to.getY()) / 2);
+            return board.isValidPosition(middle) && !board.isEmpty(middle);
+        }
+
+        if (dx == 2 && dy == 2) {
+            Position middle = new Position((from.getX() + to.getX()) / 2, (from.getY() + to.getY()) / 2);
+            return board.isValidPosition(middle) && !board.isEmpty(middle);
+        }
+
+        return false;
     }
 
-    private boolean isValidJump(Move move, GameBoard board) {
-        Position middle = move.from().midpoint(move.to());
-        if (!middle.isValid(board.getSize())) return false;
-
-        Player middlePiece = board.getPieceAt(middle);
-        return middlePiece != Player.EMPTY;
-    }
-
-    public List<Move> getValidMoves(Player player, GameBoard board) {
+    /**
+     * Возвращает список всех допустимых ходов для указанного игрока.
+     * @param player Игрок, для которого ищутся ходы
+     * @param board Игровая доска
+     * @return Список допустимых ходов
+     */
+    public List<Move> getAllValidMoves(Player player, GameBoard board) {
         List<Move> moves = new ArrayList<>();
+        List<Position> pieces = board.getAllPieces(player);
 
-        for (int y = 0; y < board.getSize(); y++) {
-            for (int x = 0; x < board.getSize(); x++) {
-                Position from = new Position(x, y);
-                if (board.getPieceAt(from) == player) {
-                    moves.addAll(getMovesFromPosition(from, player, board));
+        for (Position from : pieces) {
+            for (int[] dir : DIRECTIONS) {
+                Position stepTo = new Position(from.getX() + dir[0], from.getY() + dir[1]);
+                Move stepMove = new Move(from, stepTo, player);
+                if (isValidMove(stepMove, board)) {
+                    moves.add(stepMove);
                 }
-            }
-        }
-        return moves;
-    }
 
-    private List<Move> getMovesFromPosition(Position from, Player player, GameBoard board) {
-        List<Move> moves = new ArrayList<>();
-
-        for (Position dir : DIRECTIONS) {
-            Position to = from.add(dir);
-            Move move = new Move(from, to, player);
-            if (isValidMove(move, board)) {
-                moves.add(move);
-            }
-        }
-
-        findJumpMoves(from, from, player, board, moves, new HashSet<>());
-        return moves;
-    }
-
-    private void findJumpMoves(Position originalFrom, Position current, Player player,
-                               GameBoard board, List<Move> moves, Set<Position> visited) {
-        visited.add(current);
-
-        for (Position dir : DIRECTIONS) {
-            Position middle = current.add(dir);
-            Position to = middle.add(dir);
-
-            if (!visited.contains(to) && to.isValid(board.getSize())) {
-                Move jumpMove = new Move(originalFrom, to, player);
+                Position jumpTo = new Position(from.getX() + dir[0] * 2, from.getY() + dir[1] * 2);
+                Move jumpMove = new Move(from, jumpTo, player);
                 if (isValidMove(jumpMove, board)) {
                     moves.add(jumpMove);
-                    findJumpMoves(originalFrom, to, player, board, moves, visited);
                 }
             }
         }
+
+        return moves;
     }
 
-    public boolean isGameOver(GameBoard board, Player currentPlayer) {
-        int targetRow = (currentPlayer == Player.PLAYER1) ? board.getSize() - 1 : 0;
+    /**
+     * Проверяет, выиграл ли указанный игрок.
+     * @param player Игрок для проверки
+     * @param board Игровая доска
+     * @return true если игрок выиграл, false в противном случае
+     */
+    public boolean hasWon(Player player, GameBoard board) {
+        List<Position> pieces = board.getAllPieces(player);
+        if (pieces.size() < 10) return false;
 
-        for (int x = 0; x < board.getSize(); x++) {
-            if (board.getPieceAt(new Position(x, targetRow)) == currentPlayer) {
-                return true;
+        for (Position pos : pieces) {
+            if (!board.isInGoalArea(pos, player)) {
+                return false;
             }
         }
-        return false;
+        return true;
     }
 }
